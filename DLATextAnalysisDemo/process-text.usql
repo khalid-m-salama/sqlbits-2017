@@ -1,0 +1,57 @@
+﻿REFERENCE ASSEMBLY [TextCommon];
+REFERENCE ASSEMBLY [TextSentiment];
+
+REFERENCE ASSEMBLY [ExtPython];
+
+DECLARE @input_file string = "sqlbits/input-data/book-reviews-sample.csv";
+DECLARE @output_file string = "sqlbits/output-results/reviews-sentiment.tsv";
+
+@input_data =
+    EXTRACT Score double,
+            Text string
+    FROM @input_file
+    USING Extractors.Csv();
+
+@sentiment =
+    PROCESS @input_data
+    PRODUCE Score,
+            Text,
+            Sentiment string,
+            Conf double
+    READONLY Score,
+             Text
+    USING new Cognition.Text.SentimentAnalyzer(true);
+
+DECLARE @python_script = @"
+def stretch(input):
+    
+    output = None    
+    old_min = -1
+    old_max = 1    
+    new_min = 1
+    new_max = 5    
+
+    output = ((new_max -new_min)/(old_max-old_min))*(input-old_min)+new_min
+
+    return round(output,2)
+
+def usqlml_main(data_frame):
+    data_frame['Conf'] = data_frame['Conf'].apply(stretch)
+    data_frame['Error'] = round(abs(data_frame['Conf'] - data_frame['Score']),2)
+    return data_frame
+
+";
+
+@output_data  =
+    REDUCE @sentiment ON Score
+    PRODUCE Score double,
+            Text string,
+            Sentiment string,
+            Conf double,
+            Error double     
+    USING new Extension.Python.Reducer(pyScript:@python_script);
+
+OUTPUT @output_data 
+    TO @output_file
+    ORDER BY Text
+    USING Outputters.Tsv();
